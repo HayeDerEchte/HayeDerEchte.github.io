@@ -1,4 +1,58 @@
-// Simple same-device party game: Comment mode
+ = { ...state, ...patch };
+  render();
+}
+
+function resetRound() {
+  state.roundData = {
+    questions: [],
+    answers: [],
+    twisted: [],
+  };
+  state.currentPlayerIndex = 0;
+  state.phase = 1;
+  state.resultsIndex = 0;
+}
+
+function createId() {
+  return Math.random().toString(36).slice(2, 9);
+}
+
+function currentPlayer() {
+  return state.players[state.currentPlayerIndex] || null;
+}
+
+function isHost(player) {
+  return player && player.id === state.hostId;
+}
+
+function getPlayerName(playerId) {
+  const p = state.players.find((pl) => pl.id === playerId);
+  return p ? p.name : "???";
+}
+
+// ----- UI helpers -----
+
+function el(tag, attrs = {}, children = []) {
+  const node = document.createElement(tag);
+  Object.entries(attrs).forEach(([k, v]) => {
+    if (k === "class") node.className = v;
+    else if (k === "text") node.textContent = v;
+    else if (k === "html") node.innerHTML = v;
+    else if (k.startsWith("on") && typeof v === "function") {
+      node.addEventListener(k.slice(2), v);
+    } else if (v !== undefined && v !== null) {
+      node.setAttribute(k, v);
+    }
+  });
+  (Array.isArray(children) ? children : [children]).forEach((c) => {
+    if (c === null || c === undefined) return;
+    if (typeof c === "string") node.appendChild(document.createTextNode(c));
+    else node.appendChild(c);
+  });
+  return node;
+}
+
+// ----- Screens -----// Simple same-device party game: Comment mode
 
 const app = document.getElementById("app");
 
@@ -25,58 +79,11 @@ let state = {
     answers: [], // { playerId, questionOwnerId, text }
     twisted: [], // { playerId, answerOwnerId, text }
   },
+  resultsIndex: 0,
 };
 
 function setState(patch) {
-  state = { ...state, ...patch };
-  render();
-}
-
-function resetRound() {
-  state.roundData = {
-    questions: [],
-    answers: [],
-    twisted: [],
-  };
-  state.currentPlayerIndex = 0;
-  state.phase = 1;
-}
-
-function createId() {
-  return Math.random().toString(36).slice(2, 9);
-}
-
-function currentPlayer() {
-  return state.players[state.currentPlayerIndex] || null;
-}
-
-function isHost(player) {
-  return player && player.id === state.hostId;
-}
-
-// ----- UI helpers -----
-
-function el(tag, attrs = {}, children = []) {
-  const node = document.createElement(tag);
-  Object.entries(attrs).forEach(([k, v]) => {
-    if (k === "class") node.className = v;
-    else if (k === "text") node.textContent = v;
-    else if (k === "html") node.innerHTML = v;
-    else if (k.startsWith("on") && typeof v === "function") {
-      node.addEventListener(k.slice(2), v);
-    } else if (v !== undefined && v !== null) {
-      node.setAttribute(k, v);
-    }
-  });
-  (Array.isArray(children) ? children : [children]).forEach((c) => {
-    if (c === null || c === undefined) return;
-    if (typeof c === "string") node.appendChild(document.createTextNode(c));
-    else node.appendChild(c);
-  });
-  return node;
-}
-
-// ----- Screens -----
+  state
 
 function renderStart() {
   const nameInputId = "host-name";
@@ -440,7 +447,7 @@ function renderPhaseTwist() {
 // ----- Ergebnisse -----
 
 function renderResults() {
-  // Versuche, für jede gedrehte Frage die ursprüngliche Antwort und Frage zu finden
+  // Baue eine Liste der Resultate (wie vorher)
   const items = state.roundData.twisted.map((tw) => {
     const answer = state.roundData.answers.find((a) => a.playerId === tw.answerOwnerId);
     const originalQuestion = answer
@@ -451,19 +458,14 @@ function renderResults() {
       twistedQuestion: tw.text,
       originalAnswer: answer ? answer.text : "",
       originalQuestion: originalQuestion ? originalQuestion.text : "",
+      twistedBy: getPlayerName(tw.playerId),
+      answerBy: answer ? getPlayerName(answer.playerId) : "",
     };
   });
 
-  const list = el("div", { class: "results-list" }, items.map((item) =>
-    el("div", { class: "result-item" }, [
-      el("div", { class: "result-label", text: "Verdrehte Kombination" }),
-      el("div", { class: "result-question", text: item.twistedQuestion }),
-      el("div", { class: "result-answer", text: '"' + item.originalAnswer + '"' }),
-      item.originalQuestion
-        ? el("div", { class: "helper-text", text: "Originalfrage: " + item.originalQuestion })
-        : null,
-    ])
-  ));
+  const total = items.length || 1;
+  const index = Math.min(Math.max(state.resultsIndex, 0), total - 1);
+  const current = items[index] || items[0];
 
   const again = () => {
     resetRound();
@@ -484,12 +486,41 @@ function renderResults() {
       ]),
     ]),
     el("p", { class: "subtitle" }, [
-      "Lest die Kombos laut vor und ratet, welche Antwort zu welcher echten Frage gehört.",
+      "Zeigt jeden Post nacheinander und ratet, wie die echte Frage dazu war.",
     ]),
-    list,
-    el("div", { class: "btn-row" }, [
-      el("button", { class: "btn-primary", onclick: again }, ["Noch eine Runde"]),
-      el("button", { class: "btn-ghost", onclick: backToLobby }, ["Zurück zur Lobby"]),
+    el("div", { class: "results-list" }, [
+      el("div", { class: "result-item" }, [
+        el("div", { class: "post-header" }, [
+          el("div", { class: "post-avatar" }),
+          el("div", { class: "post-meta" }, [
+            el("div", { class: "post-name", text: current.twistedBy ? "@" + current.twistedBy : "@comment_game" }),
+            el("div", { class: "post-time", text: current.answerBy ? "Antwort von " + current.answerBy : "vor 3 min" }),
+          ]),
+        ]),
+        el("div", { class: "post-body" }, [
+          el("div", { class: "post-caption", text: current.twistedQuestion || "(keine Frage)" }),
+          el("div", { class: "result-answer", text: '"' + (current.originalAnswer || "") + '"' }),
+          current.originalQuestion
+            ? el("div", { class: "post-original", text: "Originalfrage: " + current.originalQuestion })
+            : null,
+        ]),
+        el("div", { class: "post-stats", text: "Likes: " + (12 + index * 3) + " · Kommentare: " + (3 + index) }),
+      ]),
+      el("div", { class: "results-counter", text: "Post " + (index + 1) + " von " + total }),
+    ]),
+    el("div", { class: "results-controls" }, [
+      el("button", {
+        class: "btn-primary",
+        onclick: () => {
+          if (index < total - 1) {
+            state.resultsIndex = index + 1;
+            render();
+          } else {
+            again();
+          }
+        },
+      }, [index < total - 1 ? "Naechster Post" : "Neue Runde starten"]),
+      el("button", { class: "btn-ghost", onclick: backToLobby }, ["Zurueck zur Lobby"]),
     ]),
   ]);
 }
