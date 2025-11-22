@@ -20,10 +20,15 @@ let state = {
   lobbyCode: "LOCAL",
   currentPlayerIndex: 0,
   phase: 1,
+  settings: {
+    questionsPerPlayer: 1,
+  },
   roundData: {
     questions: [], // { playerId, text }
     answers: [], // { playerId, questionOwnerId, text }
     twisted: [], // { playerId, answerOwnerId, text }
+    questionOrder: [],
+    answerOrder: [],
   },
   resultsIndex: 0,
 };
@@ -38,6 +43,8 @@ function resetRound() {
     questions: [],
     answers: [],
     twisted: [],
+    questionOrder: [],
+    answerOrder: [],
   };
   state.currentPlayerIndex = 0;
   state.phase = 1;
@@ -191,6 +198,10 @@ function renderLobby() {
       playersView,
     ]),
     el("div", { class: "section" }, [
+      el("div", { class: "section-label", text: "Lobby-Einstellungen" }),
+      el("p", { class: "helper-text", text: "Fragen pro Spieler: aktuell 1 (mehr Optionen bald)." }),
+    ]),
+    el("div", { class: "section" }, [
       el("div", { class: "section-label", text: "Spieler hinzufügen" }),
       nameInput,
       el("div", { class: "helper-text", text: "Name eingeben und Enter tippen oder Button drücken." }),
@@ -277,6 +288,7 @@ function renderPhaseQuestion() {
       el("div", { class: "section-label", text: "Deine Frage" }),
       textarea,
       el("p", { class: "helper-text", text: "Beispiel: Wie findest du Angela Merkel?" }),
+      el("p", { class: "warning-text", text: "(WENN DU NIX RICHTIGES SCHREIBEN DAN GIBT AUFS MAUL)" }),
     ]),
     el("div", { class: "btn-row" }, [
       el("button", { class: "btn-primary", onclick: next }, ["Fertig – weitergeben"]),
@@ -294,12 +306,20 @@ function shuffle(arr) {
   return a;
 }
 
-// Ordnet für Phase 2 jedem Spieler eine zufällige Frage (nicht seine eigene) zu
-function getQuestionForPlayer(playerId) {
-  const others = state.roundData.questions.filter((q) => q.playerId !== playerId);
-  const pool = others.length ? others : state.roundData.questions;
-  const shuffled = shuffle(pool);
-  return shuffled[0] || null;
+function ensureQuestionOrder() {
+  if (state.roundData.questionOrder && state.roundData.questionOrder.length === state.players.length) return;
+  const n = state.players.length;
+  const indices = [...Array(n).keys()];
+  let perm;
+  // einfache Neuversuche, bis niemand seine eigene Frage bekommt
+  for (let tries = 0; tries < 20; tries++) {
+    perm = shuffle(indices);
+    if (!perm.some((target, i) => target === i)) {
+      state.roundData.questionOrder = perm;
+      return;
+    }
+  }
+  state.roundData.questionOrder = indices.reverse();
 }
 
 // ----- Phase 2: Antworten schreiben -----
@@ -308,23 +328,17 @@ function renderPhaseAnswer() {
   const player = currentPlayer();
   if (!player) return renderLobby();
 
-  const existing = state.roundData.answers.find((a) => a.playerId === player.id);
-  let question = null;
-  if (existing) {
-    question = state.roundData.questions.find((q) => q.playerId === existing.questionOwnerId) || null;
-  } else {
-    const q = getQuestionForPlayer(player.id);
-    question = q;
-  }
-
+  ensureQuestionOrder();
+  const playerIndex = state.players.findIndex((p) => p.id === player.id);
+  const qIndex = state.roundData.questionOrder[playerIndex];
+  const question = state.roundData.questions[qIndex];
   if (!question) return renderLobby();
 
-  // Falls noch keine Zuordnung gespeichert, jetzt speichern (damit bei Refresh der Reihenfolge stabil bleibt)
-  if (!existing) {
-    state.roundData.answers.push({ playerId: player.id, questionOwnerId: question.playerId, text: "" });
+  let answerObj = state.roundData.answers.find((a) => a.playerId === player.id);
+  if (!answerObj) {
+    answerObj = { playerId: player.id, questionOwnerId: question.playerId, text: "" };
+    state.roundData.answers.push(answerObj);
   }
-
-  const answerObj = state.roundData.answers.find((a) => a.playerId === player.id);
 
   const textarea = el("textarea", {
     class: "textarea",
@@ -364,6 +378,7 @@ function renderPhaseAnswer() {
       el("div", { class: "section-label", text: "Deine Antwort" }),
       textarea,
       el("p", { class: "helper-text", text: "Beispiel: Boah, die ist schon stabil." }),
+      el("p", { class: "warning-text", text: "(WENN DU NIX RICHTIGES SCHREIBEN DAN GIBT AUFS MAUL)" }),
     ]),
     el("div", { class: "btn-row" }, [
       el("button", { class: "btn-primary", onclick: next }, ["Fertig – weitergeben"]),
@@ -371,12 +386,24 @@ function renderPhaseAnswer() {
   ]);
 }
 
-// Ordnet für Phase 3 jedem Spieler eine zufällige Antwort zu
-function getAnswerForPlayer(playerId) {
-  const others = state.roundData.answers.filter((a) => a.playerId !== playerId && a.text.trim());
-  const pool = others.length ? others : state.roundData.answers.filter((a) => a.text.trim());
-  const shuffled = shuffle(pool);
-  return shuffled[0] || null;
+function ensureAnswerOrder() {
+  if (state.roundData.answerOrder && state.roundData.answerOrder.length === state.players.length) return;
+  const n = state.players.length;
+  const indices = [...Array(n).keys()];
+  let perm;
+  for (let tries = 0; tries < 20; tries++) {
+    perm = shuffle(indices);
+    const ok = perm.every((target, i) => {
+      const answer = state.roundData.answers[target];
+      const player = state.players[i];
+      return answer && player && answer.playerId !== player.id;
+    });
+    if (ok) {
+      state.roundData.answerOrder = perm;
+      return;
+    }
+  }
+  state.roundData.answerOrder = indices.reverse();
 }
 
 // ----- Phase 3: Twisted Frage zu einer Antwort -----
@@ -385,21 +412,17 @@ function renderPhaseTwist() {
   const player = currentPlayer();
   if (!player) return renderLobby();
 
-  const existing = state.roundData.twisted.find((t) => t.playerId === player.id);
-  let answerObj = null;
-  if (existing) {
-    answerObj = state.roundData.answers.find((a) => a.playerId === existing.answerOwnerId) || null;
-  } else {
-    answerObj = getAnswerForPlayer(player.id);
-  }
-
+  ensureAnswerOrder();
+  const playerIndex = state.players.findIndex((p) => p.id === player.id);
+  const aIndex = state.roundData.answerOrder[playerIndex];
+  const answerObj = state.roundData.answers[aIndex];
   if (!answerObj) return renderLobby();
 
-  if (!existing) {
-    state.roundData.twisted.push({ playerId: player.id, answerOwnerId: answerObj.playerId, text: "" });
+  let twistObj = state.roundData.twisted.find((t) => t.playerId === player.id);
+  if (!twistObj) {
+    twistObj = { playerId: player.id, answerOwnerId: answerObj.playerId, text: "" };
+    state.roundData.twisted.push(twistObj);
   }
-
-  const twistObj = state.roundData.twisted.find((t) => t.playerId === player.id);
 
   const textarea = el("textarea", {
     class: "textarea",
@@ -437,6 +460,7 @@ function renderPhaseTwist() {
       el("div", { class: "section-label", text: "Neue Frage" }),
       textarea,
       el("p", { class: "helper-text", text: "Beispiel: Wie findet ihr die 12-jährige Rosa?" }),
+      el("p", { class: "warning-text", text: "(WENN DU NIX RICHTIGES SCHREIBEN DAN GIBT AUFS MAUL)" }),
     ]),
     el("div", { class: "btn-row" }, [
       el("button", { class: "btn-primary", onclick: next }, ["Fertig – zu den Ergebnissen"]),

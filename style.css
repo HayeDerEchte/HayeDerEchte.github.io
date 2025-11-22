@@ -259,6 +259,12 @@ body {
   margin-top: 4px;
 }
 
+.warning-text {
+  font-size: 0.75rem;
+  color: #b91c1c;
+  margin-top: 4px;
+}
+
 .pass-device {
   text-align: center;
   padding: 24px 10px 10px;
