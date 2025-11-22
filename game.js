@@ -29,6 +29,7 @@ let state = {
     twisted: [], // { playerId, answerOwnerId, text }
     questionOrder: [],
     answerOrder: [],
+    questionsCount: {}, // playerId -> count
   },
   resultsIndex: 0,
 };
@@ -45,6 +46,7 @@ function resetRound() {
     twisted: [],
     questionOrder: [],
     answerOrder: [],
+    questionsCount: {},
   };
   state.currentPlayerIndex = 0;
   state.phase = 1;
@@ -165,6 +167,22 @@ function renderLobby() {
 
   const canStart = state.players.length >= 3;
 
+  const qInput = el("input", {
+    class: "input",
+    type: "number",
+    min: "1",
+    max: "5",
+    value: String(state.settings.questionsPerPlayer || 1),
+  });
+
+  qInput.addEventListener("change", () => {
+    const raw = parseInt(qInput.value, 10);
+    if (!Number.isFinite(raw)) return;
+    const clamped = Math.min(5, Math.max(1, raw));
+    state.settings.questionsPerPlayer = clamped;
+    qInput.value = String(clamped);
+  });
+
   const startButton = el("button", {
     class: "btn-primary",
     onclick: () => {
@@ -199,7 +217,8 @@ function renderLobby() {
     ]),
     el("div", { class: "section" }, [
       el("div", { class: "section-label", text: "Lobby-Einstellungen" }),
-      el("p", { class: "helper-text", text: "Fragen pro Spieler: aktuell 1 (mehr Optionen bald)." }),
+      el("p", { class: "helper-text", text: "Wie viele Fragen soll jeder Spieler in Phase 1 schreiben?" }),
+      qInput,
     ]),
     el("div", { class: "section" }, [
       el("div", { class: "section-label", text: "Spieler hinzufügen" }),
@@ -262,17 +281,31 @@ function renderPhaseQuestion() {
     const text = textarea.value.trim();
     if (!text) return;
     state.roundData.questions.push({ playerId: player.id, text });
+    const per = state.settings.questionsPerPlayer || 1;
+    const counts = state.roundData.questionsCount || {};
+    const currentCount = counts[player.id] || 0;
+    counts[player.id] = currentCount + 1;
+    state.roundData.questionsCount = counts;
 
-    const isLast = state.currentPlayerIndex >= state.players.length - 1;
-    if (isLast) {
-      // Nächste Phase vorbereiten: Antworten
+    const allDone = state.players.every((p) => (counts[p.id] || 0) >= per);
+
+    if (allDone) {
       state.currentPlayerIndex = 0;
       state.phase = 2;
       setState({ currentScreen: Screen.PASS_DEVICE });
-    } else {
-      state.currentPlayerIndex += 1;
-      setState({ currentScreen: Screen.PASS_DEVICE });
+      return;
     }
+
+    const thisDone = counts[player.id] >= per;
+    if (thisDone) {
+      const isLastPlayer = state.currentPlayerIndex >= state.players.length - 1;
+      if (isLastPlayer) {
+        state.currentPlayerIndex = 0;
+      } else {
+        state.currentPlayerIndex += 1;
+      }
+    }
+    setState({ currentScreen: Screen.PASS_DEVICE });
   };
 
   return el("div", { class: "card" }, [
